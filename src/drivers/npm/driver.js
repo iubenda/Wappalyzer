@@ -44,6 +44,14 @@ class Driver {
 
     this.wappalyzer.driver.log = (message, source, type) => this.log(message, source, type);
     this.wappalyzer.driver.displayApps = (detected, meta, context) => this.displayApps(detected, meta, context);
+    
+    this.browser = new Browser({
+      silent: true,
+      userAgent: this.options.userAgent,
+      waitDuration: this.options.maxWait,
+    });
+
+    process.on('uncaughtException', e => this.wappalyzer.log('Uncaught exception: ' + e.message, 'driver', 'error'));
   }
 
   analyze() {
@@ -106,12 +114,8 @@ class Driver {
   }
 
   visit(pageUrl, timerScope, resolve) {
-    const browser = new Browser({
-      silent: true,
-      userAgent: this.options.userAgent,
-      waitDuration: this.options.maxWait,
-    });
-
+    const browser = this.browser;
+    
     this.timer('browser.visit start; url: ' + pageUrl.href, timerScope);
 
     browser.visit(pageUrl.href, () => {
@@ -125,19 +129,27 @@ class Driver {
       const html = this.getHtml(browser);
       const scripts = this.getScripts(browser);
       const js = this.getJs(browser);
+      const cookies = this.getCookies(browser);
 
       this.wappalyzer.analyze(pageUrl, {
         headers,
         html,
         scripts,
-        js
+        js,
+        cookies,
       })
         .then(() => {
-          const links = Array.from(browser.document.getElementsByTagName('a'))
-            .filter(link => link.protocol === 'http:' || link.protocol === 'https:')
-            .filter(link => link.hostname === this.origPageUrl.hostname)
-            .filter(link => extensions.test(link.pathname))
-            .map(link => { link.hash = ''; return url.parse(link.href) });
+          const links = Array.prototype.reduce.call(
+            browser.document.getElementsByTagName('a'), (results, link) => {
+              if ( link.protocol.match(/https?:/) || link.hostname === this.origPageUrl.hostname || extensions.test(link.pathname) ) {
+                link.hash = '';
+
+                results.push(url.parse(link.href));
+              }
+
+              return results;
+            }, []
+          );
 
           return resolve(links);
         });
@@ -217,20 +229,29 @@ class Driver {
     return html;
   }
 
-  getScripts(browser) {
-    if ( !browser.document || !browser.document.scripts ) {
+  getScripts(browser, window = null) {
+    let document;
+      
+    if (window === null) {
+        document = browser.document;
+    }
+    else {
+        document = window.document;
+    }
+    
+    if ( !document || !document.scripts ) {
       return [];
     }
 
     const scripts = Array.prototype.slice
-      .apply(browser.document.scripts)
+      .apply(document.scripts)
       .filter(script => script.src)
       .map(script => script.src);
 
     return scripts;
   }
 
-  getJs(browser) {
+  getJs(browser, window = null) {
     const patterns = this.wappalyzer.jsPatterns;
     const js = {};
 
@@ -245,7 +266,7 @@ class Driver {
 
           let value = properties.reduce((parent, property) => {
             return parent && parent.hasOwnProperty(property) ? parent[property] : null;
-          }, browser.window);
+          }, window || browser.window);
 
           value = typeof value === 'string' || typeof value === 'number' ? value : !!value;
 
@@ -257,6 +278,21 @@ class Driver {
     });
 
     return js;
+  }
+
+  getCookies(browser) {
+    const cookies = [];
+
+    if ( browser.cookies ) {
+      browser.cookies.forEach(cookie => cookies.push({
+        name: cookie.key,
+        value: cookie.value,
+        domain: cookie.domain,
+        path: cookie.path,
+      }));
+    }
+
+    return cookies;
   }
 
   crawl(pageUrl, index, depth = 1) {
