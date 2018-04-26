@@ -1,5 +1,5 @@
 {
-  "name": "iubenda-wappalyzer",
+  "name": "wappalyzer",
   "version": "5.4.8",
   "dependencies": {
     "file-type": "7.4.*",
