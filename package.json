@@ -1,5 +1,6 @@
 {
   "name": "iubenda-wappalyzer",
+  "version": "5.4.8",
   "dependencies": {
     "file-type": "7.4.*",
     "is-svg": "2.1.*",
