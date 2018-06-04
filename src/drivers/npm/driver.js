@@ -19,21 +19,16 @@ class Driver {
       maxDepth: 3,
       maxUrls: 10,
       maxWait: 5000,
-			proxy: null,
       recursive: false,
       userAgent: 'Mozilla/5.0 (compatible; Wappalyzer)',
-      htmlMaxCols: 2000,
-      htmlMaxRows: 3000,
     }, options || {});
 
-    this.options.debug = Boolean(+this.options.debug);
-    this.options.recursive = Boolean(+this.options.recursive);
+    this.options.debug = Boolean(this.options.debug);
     this.options.delay = this.options.recursive ? parseInt(this.options.delay, 10) : 0;
     this.options.maxDepth = parseInt(this.options.maxDepth, 10);
     this.options.maxUrls = parseInt(this.options.maxUrls, 10);
     this.options.maxWait = parseInt(this.options.maxWait, 10);
-    this.options.htmlMaxCols = parseInt(this.options.htmlMaxCols, 10);
-    this.options.htmlMaxRows = parseInt(this.options.htmlMaxRows, 10);
+    this.options.recursive = Boolean(this.options.recursive);
 
     this.origPageUrl = url.parse(pageUrl);
     this.analyzedPageUrls = [];
@@ -49,6 +44,12 @@ class Driver {
 
     this.wappalyzer.driver.log = (message, source, type) => this.log(message, source, type);
     this.wappalyzer.driver.displayApps = (detected, meta, context) => this.displayApps(detected, meta, context);
+    
+    this.browser = new Browser({
+      silent: true,
+      userAgent: this.options.userAgent,
+      waitDuration: this.options.maxWait,
+    });
 
     process.on('uncaughtException', e => this.wappalyzer.log('Uncaught exception: ' + e.message, 'driver', 'error'));
   }
@@ -113,14 +114,8 @@ class Driver {
   }
 
   visit(pageUrl, timerScope, resolve) {
-    const browser = new Browser({
-			proxy: this.options.proxy,
-      silent: true,
-      strictSSL: false,
-      userAgent: this.options.userAgent,
-      waitDuration: this.options.maxWait,
-    });
-
+    const browser = this.browser;
+    
     this.timer('browser.visit start; url: ' + pageUrl.href, timerScope);
 
     browser.visit(pageUrl.href, () => {
@@ -146,7 +141,7 @@ class Driver {
         .then(() => {
           const links = Array.prototype.reduce.call(
             browser.document.getElementsByTagName('a'), (results, link) => {
-              if ( link.protocol.match(/https?:/) && link.hostname === this.origPageUrl.hostname && extensions.test(link.pathname) ) {
+              if ( link.protocol.match(/https?:/) || link.hostname === this.origPageUrl.hostname || extensions.test(link.pathname) ) {
                 link.hash = '';
 
                 results.push(url.parse(link.href));
@@ -222,11 +217,11 @@ class Driver {
     let html = '';
 
     try {
-      html = browser.html()
-        .split('\n')
-        .slice(0, this.options.htmlMaxRows / 2).concat(html.slice(html.length - this.options.htmlMaxRows / 2))
-        .map(line => line.substring(0, this.options.htmlMaxCols))
-        .join('\n');
+      html = browser.html();
+
+      if ( html.length > 50000 ) {
+        html = html.substring(0, 25000) + html.substring(html.length - 25000, html.length);
+      }
     } catch ( error ) {
       this.wappalyzer.log(error.message, 'browser', 'error');
     }
@@ -234,20 +229,29 @@ class Driver {
     return html;
   }
 
-  getScripts(browser) {
-    if ( !browser.document || !browser.document.scripts ) {
+  getScripts(browser, window = null) {
+    let document;
+      
+    if (window === null) {
+        document = browser.document;
+    }
+    else {
+        document = window.document;
+    }
+    
+    if ( !document || !document.scripts ) {
       return [];
     }
 
     const scripts = Array.prototype.slice
-      .apply(browser.document.scripts)
+      .apply(document.scripts)
       .filter(script => script.src)
       .map(script => script.src);
 
     return scripts;
   }
 
-  getJs(browser) {
+  getJs(browser, window = null) {
     const patterns = this.wappalyzer.jsPatterns;
     const js = {};
 
@@ -262,7 +266,7 @@ class Driver {
 
           let value = properties.reduce((parent, property) => {
             return parent && parent.hasOwnProperty(property) ? parent[property] : null;
-          }, browser.window);
+          }, window || browser.window);
 
           value = typeof value === 'string' || typeof value === 'number' ? value : !!value;
 
@@ -291,14 +295,14 @@ class Driver {
     return cookies;
   }
 
-  crawl(pageUrl, index = 1, depth = 1) {
+  crawl(pageUrl, index, depth = 1) {
     pageUrl.canonical = pageUrl.protocol + '//' + pageUrl.host + pageUrl.pathname;
 
     return new Promise(resolve => {
       this.fetch(pageUrl, index, depth)
         .catch(() => {})
         .then(links => {
-          if ( links && this.options.recursive && depth < this.options.maxDepth ) {
+          if ( links && Boolean(this.options.recursive) && depth < this.options.maxDepth ) {
             return this.chunk(links.slice(0, this.options.maxUrls), depth + 1);
           } else {
             return Promise.resolve();

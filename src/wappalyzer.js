@@ -42,28 +42,22 @@ class Wappalyzer {
   }
 
   analyze(url, data, context) {
-    const startTime = new Date();
-
     const promises = [];
 
     var apps = {};
+
+    if ( typeof data.html !== 'string' ) {
+      data.html = '';
+    }
 
     if ( this.detected[url.canonical] === undefined ) {
       this.detected[url.canonical] = {};
     }
 
     // Additional information
-    var language = null;
+    const matches = data.html.match(/<html[^>]*[: ]lang="([a-z]{2}((-|_)[A-Z]{2})?)"/i);
 
-    if ( data.html ) {
-      if ( typeof data.html !== 'string' ) {
-        data.html = '';
-      }
-
-      const matches = data.html.match(/<html[^>]*[: ]lang="([a-z]{2}((-|_)[A-Z]{2})?)"/i);
-
-      language = matches && matches.length ? matches[1] : null;
-    }
+    const language = matches && matches.length ? matches[1] : null;
 
     Object.keys(this.apps).forEach(appName => {
       apps[appName] = this.detected[url.canonical] && this.detected[url.canonical][appName] ? this.detected[url.canonical][appName] : new Application(appName, this.apps[appName]);
@@ -88,13 +82,15 @@ class Wappalyzer {
       if ( data.headers ) {
         promises.push(this.analyzeHeaders(app, data.headers));
       }
-    });
+
+      if ( data.env ) {
+        promises.push(this.analyzeEnv(app, data.env));
+      }
+    })
 
     if ( data.js ) {
       Object.keys(data.js).forEach(appName => {
-        if (typeof data.js[appName] != 'function') {
-          promises.push(this.analyzeJs(apps[appName], data.js[appName]));
-        }
+        promises.push(this.analyzeJs(apps[appName], data.js[appName]));
       });
     }
 
@@ -115,10 +111,8 @@ class Wappalyzer {
           this.cacheDetectedApps(apps, url.canonical);
           this.trackDetectedApps(apps, url, language);
 
-          this.log('Processing ' + Object.keys(data).join(', ') + ' took ' + (( new Date() - startTime ) / 1000).toFixed(2) + 's (' + url.hostname + ')', 'core');
-
           if ( Object.keys(apps).length ) {
-            this.log('Identified ' + Object.keys(apps).join(', ') + ' (' + url.hostname + ')', 'core');
+            this.log(Object.keys(apps).length + ' apps detected: ' + Object.keys(apps).join(', ') + ' on ' + url.canonical, 'core');
           }
 
           this.driver.displayApps(this.detected[url.canonical], { language }, context);
@@ -298,7 +292,7 @@ class Wappalyzer {
 
     // Remove excluded applications
     Object.keys(apps).forEach(appName => {
-      if ( excludes.indexOf(appName) > -1 ) {
+      if ( excludes.indexOf(appName) !== -1 ) {
         delete apps[appName];
       }
     })
@@ -333,7 +327,7 @@ class Wappalyzer {
 
             // Apply app confidence to implied app
             Object.keys(app.confidence).forEach(id => {
-              apps[implied.string].confidence[id + ' implied by ' + appName] = app.confidence[id] * ( implied.confidence === undefined ? 1 : implied.confidence / 100 );
+              apps[implied.string].confidence[id + ' implied by ' + appName] = app.confidence[id] * ( implied.confidence ? implied.confidence / 100 : 1 );
             });
           });
         }
@@ -468,6 +462,7 @@ class Wappalyzer {
     const patterns = this.parsePatterns(app.props.meta);
     const promises = [];
 
+    var content = '';
     var matches = [];
 
     while ( patterns && ( matches = regex.exec(html) ) ) {
@@ -475,7 +470,7 @@ class Wappalyzer {
         const r = new RegExp('(?:name|property)=["\']' + meta + '["\']', 'i');
 
         if ( r.test(matches[0]) ) {
-          let content = matches[0].match(/content=("|')([^"']+)("|')/i);
+          content = matches[0].match(/content=("|')([^"']+)("|')/i);
 
           promises.push(this.asyncForEach(patterns[meta], pattern => {
             if ( content && content.length === 4 && pattern.regex.test(content[2]) ) {
@@ -497,19 +492,17 @@ class Wappalyzer {
     const promises = [];
 
     Object.keys(patterns).forEach(headerName => {
-      if (typeof patterns[headerName] != 'function') {
-        promises.push(this.asyncForEach(patterns[headerName], pattern => {
-          headerName = headerName.toLowerCase();
+      headerName = headerName.toLowerCase();
 
-          if ( headerName in headers ) {
-            headers[headerName].forEach(headerValue => {
-              if ( pattern.regex.test(headerValue) ) {
-                this.addDetected(app, pattern, 'headers', headerValue, headerName);
-              }
-            });
-          }
-        }));
-      }
+      promises.push(this.asyncForEach(patterns[headerName], pattern => {
+        if ( headerName in headers ) {
+          headers[headerName].forEach(headerValue => {
+            if ( pattern.regex.test(headerValue) ) {
+              this.addDetected(app, pattern, 'headers', headerValue, headerName);
+            }
+          });
+        }
+      }));
     });
 
     return promises ? Promise.all(promises) : Promise.resolve();
@@ -523,20 +516,37 @@ class Wappalyzer {
     const promises = [];
 
     Object.keys(patterns).forEach(cookieName => {
-      if (typeof patterns[cookieName] != 'function') {
-        cookieName = cookieName.toLowerCase();
+      cookieName = cookieName.toLowerCase();
 
-        promises.push(this.asyncForEach(patterns[cookieName], pattern => {
-          const cookie = cookies.find(cookie => cookie.name.toLowerCase() === cookieName);
+      promises.push(this.asyncForEach(patterns[cookieName], pattern => {
+        const cookie = cookies.find(cookie => cookie.name.toLowerCase() === cookieName);
 
-          if ( cookie && pattern.regex.test(cookie.value) ) {
-            this.addDetected(app, pattern, 'cookies', cookie.value, cookieName);
-          }
-        }));
-      }
+        if ( cookie && pattern.regex.test(cookie.value) ) {
+          this.addDetected(app, pattern, 'cookies', cookie.value, cookieName);
+        }
+      }));
     });
 
     return promises ? Promise.all(promises) : Promise.resolve();
+  }
+
+  /**
+   * Analyze environment variables
+   */
+  analyzeEnv(app, envs) {
+    var patterns = this.parsePatterns(app.props.env);
+
+    if ( patterns.length ) {
+      return Promise.resolve();
+    }
+
+    return this.asyncForEach(patterns, pattern => {
+      Object.keys(envs).forEach(env => {
+        if ( pattern.regex.test(envs[env]) ) {
+          this.addDetected(app, pattern, 'env', envs[env]);
+        }
+      })
+    });
   }
 
   /**
@@ -546,16 +556,14 @@ class Wappalyzer {
     const promises = [];
 
     Object.keys(results).forEach(string => {
-      if (typeof results[string] != 'function') {
-        promises.push(this.asyncForEach(Object.keys(results[string]), index => {
-          const pattern = this.jsPatterns[app.name][string][index];
-          const value = results[string][index];
+      promises.push(this.asyncForEach(Object.keys(results[string]), index => {
+        const pattern = this.jsPatterns[app.name][string][index];
+        const value = results[string][index];
 
-          if ( pattern && pattern.regex.test(value) ) {
-            this.addDetected(app, pattern, 'js', value);
-          }
-        }));
-      }
+        if ( pattern && pattern.regex.test(value) ) {
+          this.addDetected(app, pattern, 'js', value);
+        }
+      }));
     });
 
     return promises ? Promise.all(promises) : Promise.resolve();
@@ -568,7 +576,7 @@ class Wappalyzer {
     app.detected = true;
 
     // Set confidence level
-    app.confidence[type + ' ' + ( key ? key + ' ' : '' ) + pattern.regex] = pattern.confidence === undefined ? 100 : pattern.confidence;
+    app.confidence[type + ' ' + ( key ? key + ' ' : '' ) + pattern.regex] = pattern.confidence || 100;
 
     // Detect version number
     if ( pattern.version ) {
@@ -586,7 +594,7 @@ class Wappalyzer {
           }
 
           // Replace back references
-          version = version.trim().replace(new RegExp('\\\\' + i, 'g'), match || '');
+          version = version.replace(new RegExp('\\\\' + i, 'g'), match || '');
         });
 
         if ( version && versions.indexOf(version) === -1 ) {
