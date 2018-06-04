@@ -11,10 +11,10 @@
   },
   "main": "src/drivers/driver.js",
   "files": [
-    "src/apps.json",
-    "src/drivers/npm/index.js",
-    "src/drivers/npm/driver.js",
-    "src/wappalyzer.js"
+    "apps.json",
+    "index.js",
+    "driver.js",
+    "wappalyzer.js"
   ],
   "dependencies": {
     "request": "^2.85.0",
