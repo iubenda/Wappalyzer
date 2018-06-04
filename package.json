@@ -1,23 +1,54 @@
 {
-  "name": "wappalyzer",
-  "description": "Uncovers the technologies used on websites",
-  "homepage": "https://github.com/AliasIO/Wappalyzer",
-  "version": "5.4.15",
-  "author": "Elbert Alias",
-  "license": "GPL-3.0",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/AliasIO/Wappalyzer"
+  "_from": "wappalyzer@5.4.12",
+  "_id": "wappalyzer@5.4.12",
+  "_inBundle": false,
+  "_integrity": "sha512-jcMUvrK69EleL9/bnO8Jjp1X0uX82/lk02QF1pYqjfpc3NcpnIMG4oJNolTCikkVmTs8I9v0TPEM67nwzdI39g==",
+  "_location": "/wappalyzer",
+  "_phantomChildren": {},
+  "_requested": {
+    "type": "version",
+    "registry": true,
+    "raw": "wappalyzer@5.4.12",
+    "name": "wappalyzer",
+    "escapedName": "wappalyzer",
+    "rawSpec": "5.4.12",
+    "saveSpec": null,
+    "fetchSpec": "5.4.12"
   },
-  "main": "src/drivers/driver.js",
+  "_requiredBy": [
+    "#USER",
+    "/"
+  ],
+  "_resolved": "https://registry.npmjs.org/wappalyzer/-/wappalyzer-5.4.12.tgz",
+  "_shasum": "524934a1175b353d4deda13de0ffea267c677298",
+  "_spec": "wappalyzer@5.4.12",
+  "_where": "/Users/sirvasile/Documents/GitHub/iubenda-radar",
+  "author": {
+    "name": "Elbert Alias"
+  },
+  "bugs": {
+    "url": "https://github.com/AliasIO/Wappalyzer/issues"
+  },
+  "bundleDependencies": false,
+  "dependencies": {
+    "request": "^2.83.0",
+    "zombie": "^5.0.7"
+  },
+  "deprecated": false,
+  "description": "Uncovers the technologies used on websites",
   "files": [
     "apps.json",
     "index.js",
     "driver.js",
     "wappalyzer.js"
   ],
-  "dependencies": {
-    "request": "^2.85.0",
-    "zombie": "^5.0.8"
-  }
+  "homepage": "https://github.com/AliasIO/Wappalyzer",
+  "license": "GPL-3.0",
+  "main": "driver.js",
+  "name": "wappalyzer",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AliasIO/Wappalyzer.git"
+  },
+  "version": "5.4.12"
 }

@@ -1,13 +1,9 @@
-(() => {
+(function() {
 	try {
-    addEventListener('message', onMessage);
-
-    function onMessage(event) {
+    addEventListener('message', (event => {
       if ( event.data.id !== 'patterns' ) {
         return;
       }
-
-      removeEventListener('message', onMessage);
 
       const patterns = event.data.patterns || {};
 
@@ -34,9 +30,13 @@
       }
 
       postMessage({ id: 'js', js }, '*');
-    }
+    }), false);
+  } catch(e) {
+    // Fail quietly
+  }
 
-    function detectJs(chain) {
+  function detectJs(chain) {
+    try {
       const properties = chain.split('.');
 
       var value = properties.length ? window : null;
@@ -44,7 +44,7 @@
       for ( let i = 0; i < properties.length; i ++ ) {
         var property = properties[i];
 
-        if ( value && value.hasOwnProperty(property) ) {
+        if ( value.hasOwnProperty(property) ) {
           value = value[property];
         } else {
           value = null;
@@ -54,8 +54,8 @@
       }
 
       return typeof value === 'string' || typeof value === 'number' ? value : !!value;
+    } catch(e) {
+      // Fail quietly
     }
-  } catch(e) {
-    // Fail quietly
   }
-})();
+}());

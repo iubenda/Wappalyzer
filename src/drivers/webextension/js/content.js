@@ -3,9 +3,6 @@
 
 if ( typeof browser !== 'undefined' && typeof document.body !== 'undefined' ) {
   try {
-    sendMessage('init', {});
-
-    // HTML
     var html = new XMLSerializer().serializeToString(document).split('\n');
 
     html = html
@@ -13,34 +10,39 @@ if ( typeof browser !== 'undefined' && typeof document.body !== 'undefined' ) {
       .map(line => line.substring(0, 1000))
       .join('\n');
 
-    // Scripts
     const scripts = Array.prototype.slice
       .apply(document.scripts)
       .filter(script => script.src)
-      .map(script => script.src)
-      .filter(script => script.indexOf('data:text/javascript;') !== 0);
+      .map(script => script.src);
 
-    sendMessage('analyze', { html, scripts });
+    browser.runtime.sendMessage({
+      id: 'analyze',
+      subject: { html, scripts },
+      source: 'content.js'
+    });
 
-    // JavaScript variables
     const script = document.createElement('script');
 
     script.onload = () => {
-      const onMessage = event => {
+      addEventListener('message', event => {
         if ( event.data.id !== 'js' ) {
           return;
         }
 
-        removeEventListener('message', onMessage);
+        browser.runtime.sendMessage({
+          id: 'analyze',
+          subject: {
+            js: event.data.js
+          },
+          source: 'content.js'
+        });
+      }, true);
 
-        sendMessage('analyze', { js: event.data.js });
-
-        script.remove();
-      };
-
-      addEventListener('message', onMessage);
-
-      sendMessage('get_js_patterns', {}, response => {
+      ( chrome || browser ).runtime.sendMessage({
+        id: 'init_js',
+        subject: {},
+        source: 'content.js'
+      }, response => {
         if ( response ) {
           postMessage({
             id: 'patterns',
@@ -50,22 +52,19 @@ if ( typeof browser !== 'undefined' && typeof document.body !== 'undefined' ) {
       });
     };
 
+    script.setAttribute('id', 'wappalyzer');
     script.setAttribute('src', browser.extension.getURL('js/inject.js'));
 
     document.body.appendChild(script);
   } catch (e) {
-    sendMessage('log', e);
+    log(e);
   }
 }
 
-function sendMessage(id, subject, callback) {
-  ( chrome || browser ).runtime.sendMessage({
-    id,
-    subject,
+function log(message) {
+  browser.runtime.sendMessage({
+    id: 'log',
+    message,
     source: 'content.js'
-  }, callback || ( () => {} ));
+  });
 }
-
-// https://stackoverflow.com/a/44774834
-// https://developer.mozilla.org/en-US/Add-ons/WebExtensions/API/tabs/executeScript#Return_value
-undefined;

@@ -8,9 +8,9 @@
 const wappalyzer = new Wappalyzer();
 
 var tabCache = {};
+var headersCache = {};
 var categoryOrder = [];
 var options = {};
-var robotsTxtQueue = {};
 
 browser.tabs.onRemoved.addListener(tabId => {
   tabCache[tabId] = null;
@@ -117,43 +117,48 @@ getOption('version')
 getOption('dynamicIcon', true);
 getOption('pinnedCategory');
 
-// Run content script on all tabs
-browser.tabs.query({ url: [ 'http://*/*', 'https://*/*' ] })
-  .then(tabs => {
-    tabs.forEach(tab => {
+// Run content script
+var callback = tabs => {
+  tabs.forEach(tab => {
+    if ( tab.url.match(/^https?:\/\//) ) {
       browser.tabs.executeScript(tab.id, {
-        file: '../js/content.js'
+        file: 'js/content.js'
       });
-    })
+    }
   })
+};
+
+browser.tabs.query({})
+  .then(callback)
   .catch(error => wappalyzer.log(error, 'driver', 'error'));
 
 // Capture response headers
 browser.webRequest.onCompleted.addListener(request => {
-  const headers = {};
+  var responseHeaders = {};
 
   if ( request.responseHeaders ) {
-    const url = wappalyzer.parseUrl(request.url);
+    var url = wappalyzer.parseUrl(request.url);
 
-    browser.tabs.query({ url: [ url.href ] })
-      .then(tabs => {
-        const tab = tabs[0] || null;
+    request.responseHeaders.forEach(function(header) {
+      if ( !responseHeaders[header.name.toLowerCase()] ) {
+        responseHeaders[header.name.toLowerCase()] = []
+      }
+      responseHeaders[header.name.toLowerCase()].push(header.value || '' + header.binaryValue);
+    });
 
-        if ( tab ) {
-          request.responseHeaders.forEach(header => {
-            const name = header.name.toLowerCase();
+    if ( headersCache.length > 50 ) {
+      headersCache = {};
+    }
 
-            headers[name] = headers[name] || [];
+    if ( /text\/html/.test(responseHeaders['content-type'][0]) ) {
+      if ( headersCache[url.canonical] === undefined ) {
+        headersCache[url.canonical] = {};
+      }
 
-            headers[name].push(( header.value || header.binaryValue || '' ).toString());
-          });
-
-          if ( headers['content-type'] && /\/x?html/.test(headers['content-type'][0]) ) {
-            wappalyzer.analyze(url, { headers }, { tab });
-          }
-        }
-      })
-      .catch(error => wappalyzer.log(error, 'driver', 'error'));
+      Object.keys(responseHeaders).forEach(header => {
+        headersCache[url.canonical][header] = responseHeaders[header].slice();
+      });
+    }
   }
 }, { urls: [ 'http://*/*', 'https://*/*' ], types: [ 'main_frame' ] }, [ 'responseHeaders' ]);
 
@@ -161,24 +166,26 @@ browser.webRequest.onCompleted.addListener(request => {
 ( chrome || browser ).runtime.onMessage.addListener((message, sender, sendResponse) => {
   if ( typeof message.id != 'undefined' ) {
     if ( message.id !== 'log' ) {
-      wappalyzer.log('Message' + ( message.source ? ' from ' + message.source : '' ) + ': ' + message.id, 'driver');
+      wappalyzer.log('Message received' + ( message.source ? ' from ' + message.source : '' ) + ': ' + message.id, 'driver');
     }
 
-    var url = wappalyzer.parseUrl(sender.tab ? sender.tab.url : '');
     var response;
 
     switch ( message.id ) {
       case 'log':
-        wappalyzer.log(message.subject, message.source);
-
-        break;
-      case 'init':
-        browser.cookies.getAll({ domain: '.' + url.hostname })
-          .then(cookies => wappalyzer.analyze(url, { cookies }, { tab: sender.tab }));
+        wappalyzer.log(message.message, message.source);
 
         break;
       case 'analyze':
-        wappalyzer.analyze(url, message.subject, { tab: sender.tab });
+        var url = wappalyzer.parseUrl(sender.tab.url);
+
+        if ( headersCache[url.canonical] !== undefined ) {
+          message.subject.headers = headersCache[url.canonical];
+        }
+
+        wappalyzer.analyze(url, message.subject, {
+          tab: sender.tab
+        });
 
         break;
       case 'ad_log':
@@ -198,7 +205,7 @@ browser.webRequest.onCompleted.addListener(request => {
         setOption(message.key, message.value);
 
         break;
-      case 'get_js_patterns':
+      case 'init_js':
         response = {
           patterns: wappalyzer.jsPatterns
         };
@@ -228,55 +235,51 @@ wappalyzer.driver.log = (message, source, type) => {
 wappalyzer.driver.displayApps = (detected, meta, context) => {
   var tab = context.tab;
 
-  if ( tab === undefined ) {
-    return;
-  }
-
-  tabCache[tab.id] = tabCache[tab.id] || {
-    detected: []
-  };
+  tabCache[tab.id] = tabCache[tab.id] || { detected: [] };
 
   tabCache[tab.id].detected = detected;
 
-  var appName, found = false;
+  if ( Object.keys(detected).length ) {
+    var appName, found = false;
 
-  // Find the main application to display
-  [ options.pinnedCategory ].concat(categoryOrder).forEach(match => {
-    Object.keys(detected).forEach(appName => {
-      var app = detected[appName];
+    // Find the main application to display
+    [ options.pinnedCategory ].concat(categoryOrder).forEach(match => {
+      Object.keys(detected).forEach(appName => {
+        var app = detected[appName];
 
-      app.props.cats.forEach(category => {
-        if ( category === match && !found ) {
-          var icon = app.props.icon || 'default.svg';
+        app.props.cats.forEach(category => {
+          if ( category === match && !found ) {
+            var icon = app.props.icon || 'default.svg';
 
-          if ( !options.dynamicIcon ) {
-            icon = 'default.svg';
+            if ( !options.dynamicIcon ) {
+              icon = 'default.svg';
+            }
+
+            if ( /\.svg$/i.test(icon) ) {
+              icon = 'converted/' + icon.replace(/\.svg$/, '.png');
+            }
+
+            try {
+              browser.pageAction.setIcon({
+                tabId: tab.id,
+                path: '../images/icons/' + icon
+              });
+            } catch(e) {
+              // Firefox for Android does not support setIcon see https://bugzilla.mozilla.org/show_bug.cgi?id=1331746
+            }
+
+            found = true;
           }
-
-          if ( /\.svg$/i.test(icon) ) {
-            icon = 'converted/' + icon.replace(/\.svg$/, '.png');
-          }
-
-          try {
-            browser.pageAction.setIcon({
-              tabId: tab.id,
-              path: '../images/icons/' + icon
-            });
-          } catch(e) {
-            // Firefox for Android does not support setIcon see https://bugzilla.mozilla.org/show_bug.cgi?id=1331746
-          }
-
-          found = true;
-        }
+        });
       });
     });
-  });
 
-  if ( typeof chrome !== 'undefined' ) {
-    // Browser polyfill doesn't seem to work here
-    chrome.pageAction.show(tab.id);
-  } else {
-    browser.pageAction.show(tab.id);
+    if ( typeof chrome !== 'undefined' ) {
+      // Browser polyfill doesn't seem to work here
+      chrome.pageAction.show(tab.id);
+    } else {
+      browser.pageAction.show(tab.id);
+    }
   }
 };
 
@@ -284,11 +287,7 @@ wappalyzer.driver.displayApps = (detected, meta, context) => {
  * Fetch and cache robots.txt for host
  */
 wappalyzer.driver.getRobotsTxt = (host, secure = false) => {
-  if ( robotsTxtQueue.hasOwnProperty(host) ) {
-    return robotsTxtQueue[host];
-  }
-
-  robotsTxtQueue[host] = new Promise((resolve, reject) => {
+  return new Promise((resolve, reject) => {
     getOption('tracking', true)
       .then(tracking => {
         if ( !tracking ) {
@@ -300,31 +299,34 @@ wappalyzer.driver.getRobotsTxt = (host, secure = false) => {
             robotsTxtCache = robotsTxtCache || {};
 
             if ( host in robotsTxtCache ) {
-              return resolve(robotsTxtCache[host]);
+              resolve(robotsTxtCache[host]);
+            } else {
+              const url = 'http' + ( secure ? 's' : '' ) + '://' + host + '/robots.txt';
+
+              fetch('http' + ( secure ? 's' : '' ) + '://' + host + '/robots.txt')
+                .then(response => {
+                  if ( !response.ok ) {
+                    if ( response.status === 404 ) {
+                      return '';
+                    } else {
+                      throw 'GET ' + response.url + ' was not ok';
+                    }
+                  }
+
+                  return response.text();
+                })
+                .then(robotsTxt => {
+                  robotsTxtCache[host] = wappalyzer.parseRobotsTxt(robotsTxt);
+
+                  setOption('robotsTxtCache', robotsTxtCache);
+
+                  resolve(robotsTxtCache[host]);
+                })
+                .catch(reject);
             }
-
-            const timeout = setTimeout(() => resolve([]), 3000);
-
-            fetch('http' + ( secure ? 's' : '' ) + '://' + host + '/robots.txt', { redirect: 'follow' })
-              .then(response => {
-                clearTimeout(timeout);
-
-                return response.ok ? response.text() : '';
-              })
-              .then(robotsTxt => {
-                robotsTxtCache[host] = wappalyzer.parseRobotsTxt(robotsTxt);
-
-                setOption('robotsTxtCache', robotsTxtCache);
-
-                resolve(robotsTxtCache[host]);
-              })
-              .catch(err => resolve([]));
           });
       });
-  })
-  .finally(() => delete robotsTxtQueue[host]);
-
-  return robotsTxtQueue[host];
+  });
 };
 
 /**
